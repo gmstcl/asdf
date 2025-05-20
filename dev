@@ -1,0 +1,145 @@
+#define F_CPU 14745600UL // CPU 클럭 주파수 정의 (14.7456 MHz)
+#include <avr/io.h>      // AVR 입출력 헤더
+#include <avr/interrupt.h> // 인터럽트 헤더 (현재 사용 안함)
+#include <util/delay.h>  // _delay_ms() 함수 사용을 위한 헤더
+
+// 비트 설정/클리어 매크로
+#define sbi(PORTX,BITX) PORTX |= (1<<BITX)     // 해당 비트를 1로 설정
+#define cbi(PORTX,BITX) PORTX &= ~(1<<BITX)    // 해당 비트를 0으로 클리어
+
+// LCD Enable 신호 (E핀 펄스)
+#define TLCD_EN {cbi(PORTB,2); sbi(PORTB,2);} // E핀에 펄스를 줌
+
+#define DATA PORTC // LCD 데이터 버스에 연결된 포트 정의
+
+// LCD 디스플레이 ON/OFF 상태 매크로
+#define ON 1
+#define OFF 2
+
+// 화면 이동 방향 정의
+#define RIGHT 1
+#define LEFT 2
+
+// 포트 초기화 함수
+void Port_Init(void){
+	DDRB=0xff; // 포트B 전체를 출력으로 설정 (RS, RW, E, 등 LCD 제어용)
+	DDRC=0xff; // 포트C 전체를 출력으로 설정 (LCD 데이터 버스)
+}
+
+// LCD Enable 핀에 펄스를 주는 함수 (데이터/명령 전송 완료용)
+void E_Pulse(){
+	sbi(PORTB,2);       // E = 1
+	_delay_ms(5);       // 약간의 지연
+	cbi(PORTB,2);       // E = 0 (하강엣지에서 LCD가 명령 인식)
+}
+
+// LCD에 데이터 또는 명령 전송
+void TLCD_DATA(unsigned char data){
+	DATA = data;    // 데이터 포트에 값 출력
+	TLCD_EN;        // Enable 펄스 줘서 LCD에 전달
+}
+
+// LCD 기능 설정 명령어 전송 (8비트, 2줄, 5x8 도트)
+void Func_Set(){
+	cbi(PORTB,0);    // RS = 0 (명령 모드)
+	cbi(PORTB,1);    // RW = 0 (쓰기 모드)
+
+	TLCD_DATA(0x38); // Function Set 명령 (8bit, 2 line, 5x8 dot)
+	E_Pulse();
+}
+
+// LCD 초기화 함수
+void Init_LCD(void){
+	cbi(PORTB,2);     // E 초기화
+	_delay_ms(15);    // LCD 안정화 대기
+	Func_Set();       // 기능 설정
+	_delay_ms(10);
+	Func_Set();
+	_delay_ms(150);
+	Func_Set();
+
+	TLCD_DATA(0x0f);  // Display ON, Cursor ON, Blink ON
+	E_Pulse();
+	TLCD_DATA(0x06);  // Entry Mode Set (커서 우측 이동, 화면 고정)
+	E_Pulse();
+	TLCD_DATA(0x01);  // 화면 클리어
+	E_Pulse();
+}
+
+// 문자 1개 출력 (데이터 전송 모드)
+void lcd_char(char s){
+	sbi(PORTB,0);      // RS = 1 (데이터 모드)
+	TLCD_DATA(s);      // 문자 데이터 전송
+	E_Pulse();
+}
+
+// 커서 위치 설정 함수 (x: 위치, y: 줄 번호)
+void lcd_disp(char x, char y){
+	cbi(PORTB,0);      // RS = 0 (명령 모드)
+	cbi(PORTB,1);      // RW = 0 (쓰기 모드)
+	if(y==0)
+	TLCD_DATA(x + 0x80);  // 1행 주소 시작: 0x80
+	else if(y==1)
+	TLCD_DATA(x + 0xc0);  // 2행 주소 시작: 0xC0
+	E_Pulse();
+}
+
+// 화면 전체를 좌우로 이동시키는 함수
+void move_disp(char p){
+	cbi(PORTB,0); // 명령 모드
+	cbi(PORTB,1); // 쓰기 모드
+	if(p==LEFT)
+	TLCD_DATA(0x18);  // 화면 왼쪽으로 이동
+	else if(p==RIGHT)
+	TLCD_DATA(0x1C);  // 화면 오른쪽으로 이동
+	E_Pulse();
+}
+
+// 화면 클리어 함수
+void clrscr(void){
+	cbi(PORTB,0);         // 명령 모드
+	cbi(PORTB,1);         // 쓰기 모드
+	TLCD_DATA(0x01);      // Clear Display 명령
+	E_Pulse();
+	_delay_ms(10);        // 화면 지우는 데 시간이 걸리므로 충분히 대기
+}
+
+// 문자열 출력 함수 (x: 위치, y: 줄 번호, str: 문자열 포인터)
+void lcd(char x, char y, char *str){
+	lcd_disp(x, y);       // 커서 위치 설정
+	while(*str)
+	lcd_char(*str++); // 문자열 출력 (문자 하나씩)
+}
+
+// LCD 디스플레이 ON/OFF 제어 함수
+void disp_ON_OFF(char d) {
+	cbi(PORTB, 0);  // RS = 0 (명령 모드)
+	cbi(PORTB, 1);  // RW = 0 (쓰기 모드)
+
+	if (d == ON)
+	TLCD_DATA(0x0C);  // Display ON, Cursor OFF, Blink OFF
+	else
+	TLCD_DATA(0x08);  // Display OFF
+
+	E_Pulse(); // 명령 실행
+}
+
+// 메인 함수
+int main(){
+	int i;
+	Port_Init();   // 포트 초기화
+	Init_LCD();    // LCD 초기화
+
+	while(1){
+		clrscr();                          // 화면 클리어
+		lcd(0,0,"GongJu");                // 첫 줄에 "GongJu" 출력
+		_delay_ms(1000);                  // 1초 대기
+
+		for(i=0; i<5; i++){               // 깜빡이기 반복 5번
+			disp_ON_OFF(OFF);            // 디스플레이 OFF
+			_delay_ms(500);              // 0.5초 대기
+
+			disp_ON_OFF(ON);             // 디스플레이 ON
+			_delay_ms(500);              // 0.5초 대기
+		}
+}
